@@ -1,141 +1,125 @@
 local config = require("popurri.config")
 local utils = require("popurri.utils")
 local parsers = require("nvim-treesitter.parsers")
-local palettes = require("popurri.constants").palettes
+local const = require("popurri.constants")
+local palettes = const.colour_palettes
+local qs = const.query_strings
 local ts = vim.treesitter
 local notif_type = vim.log.levels
 local timer = vim.loop.new_timer()
 
 local M = {}
 
-local qs_lua_arg = [[
-  (parameters (identifier) @popurri_lua_arg)
-]]
-local qs_lua_var = [[
-  [
-    (variable_list (identifier))
-    (variable_list (dot_index_expression) @mindex (#lua-match? @mindex "^M"))
-  ] @popurri_lua_var
-]]
+local supported_langs = { "lua" }
 
----@param palettes_tbl table
-local pick_random_palette = function(palettes_tbl)
-	local keys = vim.tbl_keys(palettes_tbl)
-	local key = keys[math.random(#keys)]
-	local palette = palettes[key]
-	return palette
-end
+---@type integer | nil
+local buffer_nr
 
----@param palette_tbl table
-local pick_random_colour = function(palette_tbl)
-	local colour = palette_tbl[math.random(#palette_tbl)]
-	return colour
-end
-
-local created_hl = {}
-
----@param rline integer
----@param rstart integer
----@param rend integer
----@param palette table
-local create_hl = function(bufnr, ns_id, rline, rstart, rend, palette)
-	local colour = pick_random_colour(palette)
-	local hl = "PopurriL" .. tostring(rline) .. "S" .. tostring(rstart) .. "E" .. tostring(rend)
-	vim.cmd("highlight " .. hl .. " guifg=" .. colour)
-	vim.api.nvim_buf_add_highlight(bufnr, ns_id, hl, rline, rstart, rend)
-	table.insert(created_hl, hl)
-end
-
----@type integer
-local bufnr
-
----@type number
+---@type number | nil
 local namespace_id
 
-local clear_highlights = function()
-	if bufnr and namespace_id then
-		vim.api.nvim_buf_clear_namespace(bufnr, namespace_id, 0, -1)
-		for _, hl in ipairs(created_hl) do
-			vim.cmd("highlight clear " .. hl)
-		end
-	end
-end
+---@type string[]
+local hl_list = {}
 
-local popurrify = function(parser, qs, palette)
-	if not bufnr then
-		bufnr = vim.api.nvim_get_current_buf()
-	end
-	if not namespace_id then
-		namespace_id = vim.api.nvim_create_namespace("Popurri")
-	end
+---@type string
+local prev_hl_colour = ""
 
-	local tree = parser:parse()[1]
-	local root = tree:root()
-	local lang = parser:lang()
-	local query = ts.query.parse(lang, qs)
-
-	for _, matches in query:iter_matches(root, 0, 1, -1) do
-		for _, match in ipairs(matches) do
-			local range = { ts.get_node_range(match) }
-			local rline = range[1]
-			local rstart = range[2]
-			local rend = range[4]
-			local next_rstart = rstart
-			repeat
-				if M.get_status() == false then
-					break
-				end
-				create_hl(bufnr, namespace_id, rline, next_rstart, rend, palette)
-				next_rstart = next_rstart + 1
-			until next_rstart > rend
-		end
-	end
-end
-
----@param qs string
+---@param bufnr integer
+---@param ns_id number Namespace ID
+---@param row_line integer
+---@param col_start integer
+---@param col_end integer
 ---@param palette table
-local start_timer = function(parser, qs, palette)
-	timer:start(
-		0,
-		200,
-		vim.schedule_wrap(function()
-			popurrify(parser, qs, palette)
-		end)
-	)
+local create_hl = function(bufnr, ns_id, row_line, col_start, col_end, palette)
+	local lrow = tostring(row_line)
+	local scol = tostring(col_start)
+	local ecol = tostring(col_end)
+	local hl_colour
+	repeat
+		hl_colour = utils.pick_random_colour(palette)
+	until hl_colour ~= prev_hl_colour
+	prev_hl_colour = hl_colour
+	local hl_name = "PopurriL" .. lrow .. "S" .. scol .. "E" .. ecol
+	vim.cmd("highlight " .. hl_name .. " guifg=" .. hl_colour)
+	vim.api.nvim_buf_add_highlight(bufnr, ns_id, hl_name, row_line, col_start, col_end)
+	table.insert(hl_list, hl_name)
 end
 
-local stop_timer = function()
-	timer:stop()
+--- Remove all Popurri highlights from memory
+local clear_hl = function()
+	if buffer_nr and namespace_id then
+		vim.api.nvim_buf_clear_namespace(buffer_nr, namespace_id, 0, -1)
+		for _, hl_name in ipairs(hl_list) do
+			vim.cmd("highlight clear " .. hl_name)
+		end
+	end
 end
 
 local set_status = function(new_status)
 	config.status = new_status
 end
 
-M.get_status = function()
+local get_status = function()
 	return config.status
 end
 
-M.start = function()
-	local parser = parsers.get_parser(bufnr)
-	local palette = pick_random_palette(palettes)
-	if utils.is_valid_lang(parser) then
-		start_timer(parser, qs_lua_arg, palette)
-		utils.notify(" 🎉", "Popurri started", notif_type.INFO)
-		set_status(true)
-	else
-		utils.notify(" ❌", "Invalid language! Popurri only works with Lua (by now)", notif_type.ERROR)
+local popurrify = function(query_string, palette)
+	buffer_nr = vim.api.nvim_get_current_buf()
+	namespace_id = vim.api.nvim_create_namespace("Popurri")
+	local parser = parsers.get_parser(buffer_nr)
+	local tree = parser:parse()[1]
+	local query = ts.query.parse(parser:lang(), query_string)
+
+	for _, matches in query:iter_matches(tree:root(), 0, 1, -1) do
+		for _, match in ipairs(matches) do
+			local range = { ts.get_node_range(match) }
+			local row = range[1]
+			local col_start = range[2]
+			local col_end = range[4]
+			local col = col_start
+			repeat
+				if get_status() == false then
+					break
+				end
+				create_hl(buffer_nr, namespace_id, row, col, col_end, palette)
+				col = col + 1
+			until col > col_end
+		end
 	end
 end
 
-M.stop = function()
-	stop_timer()
-	if bufnr and namespace_id then
-		vim.api.nvim_buf_clear_namespace(bufnr, namespace_id, 0, -1)
+M.get_status = get_status
+
+M.start = function()
+	if not utils.is_valid_lang(supported_langs) then
+		utils.notify(" ❌", "Popurri: Invalid target!", notif_type.ERROR)
+		return
 	end
-	clear_highlights()
-	utils.notify(" 🛑", "Popurri stopped", notif_type.WARN)
-	set_status(false)
+
+	set_status(true)
+	-- local palette = utils.pick_random_palette(palettes)
+	timer:start(
+		0,
+		300,
+		vim.schedule_wrap(function()
+			-- TODO: Add functionality to query dynamically from the command line
+			popurrify(qs.lua.args, palettes.cake)
+		end)
+	)
+	utils.notify(" 🎉", "Popurri started!", notif_type.INFO)
+end
+
+M.stop = function()
+	if buffer_nr and namespace_id then
+		set_status(false)
+		timer:stop()
+		vim.api.nvim_buf_clear_namespace(buffer_nr, namespace_id, 0, -1)
+		clear_hl()
+		buffer_nr = nil
+		namespace_id = nil
+		prev_hl_colour = ""
+		utils.notify(" 🛑", "Popurri stopped", notif_type.WARN)
+	end
 end
 
 return M

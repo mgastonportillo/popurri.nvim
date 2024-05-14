@@ -5,6 +5,7 @@ local config = require("popurri.config")
 local cmd = vim.api.nvim_create_user_command
 
 local create_commands = function()
+	-- TODO: Check Lazy codebase for reference and ideas
 	cmd("Popurri", function()
 		if api.get_status() == false then
 			api.start()
