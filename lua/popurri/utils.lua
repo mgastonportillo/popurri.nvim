@@ -1,11 +1,11 @@
 local M = {}
 
 M.notify = function(icon, msg, type)
-	---@diagnostic disable-next-line
-	vim.notify.dismiss()
+	vim.notify.dismiss() ---@diagnostic disable-line
 	vim.notify(msg, type, { icon = icon, timeout = 500, render = "compact" })
 end
 
+---@param supported_langs string[]
 M.is_valid_lang = function(supported_langs)
 	for _, lang in ipairs(supported_langs) do
 		if lang == vim.bo.ft then

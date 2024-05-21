@@ -1,19 +1,19 @@
 local M = {}
 
+---@type boolean
 M.status = false
 
 ---@type PopurriConfig
-local defaults = {}
+local defaults = {
+	default_query = nil,
+}
 
 ---@type PopurriConfig
 M.options = {}
 
 ---@param opts? PopurriConfig
 M.setup = function(opts)
-	opts = opts or {}
-	M.options = vim.tbl_deep_extend("force", defaults, opts)
+	M.options = vim.tbl_deep_extend("force", {}, defaults, opts or {})
 end
-
-M.setup()
 
 return M
